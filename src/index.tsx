@@ -1,6 +1,12 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { bitable, IFieldMeta, FieldType } from "@lark-base-open/js-sdk";
+import {
+  bitable,
+  IFieldMeta,
+  FieldType,
+  IOpenSingleSelectField,
+  IOpenMultiSelectField,
+} from "@lark-base-open/js-sdk";
 import {
   Button,
   message,
@@ -49,15 +55,31 @@ function LoadApp() {
     "info",
   );
 
+  const [table, setTable] = useState<any>(null);
+  const [selectedFieldId, setSelectedFieldId] = useState<string | null>(null);
+
   useEffect(() => {
     const init = async () => {
       try {
-        const table = await bitable.base.getActiveTable();
-        const name = await table.getName();
+        const currentTable = await bitable.base.getActiveTable();
+        const name = await currentTable.getName();
+        setTable(currentTable);
         setTableName(name);
         setNewTableName(`${name}_${t("copy")}`);
         setStatusMessage(t("ready"));
         setStatusType("info");
+
+        const fieldMetaList = await currentTable.getFieldMetaList();
+        const selectedMeta = fieldMetaList.find(
+          (f) =>
+            f.name.toLowerCase() === "selected" &&
+            f.type === FieldType.Checkbox,
+        );
+        if (selectedMeta) {
+          setSelectedFieldId(selectedMeta.id);
+        } else {
+          setStatusMessage(t("ready") + "（未检测到 'selected' 复选框字段）");
+        }
       } catch (error: any) {
         console.error("Init error:", error);
         if (error?.message === "time out" || error === "time out") {
@@ -70,30 +92,63 @@ function LoadApp() {
       }
     };
     init();
-
-    const unsubscribe = bitable.base.onSelectionChange(async (event) => {
-      if (event.data.recordId) {
-        const recordId = event.data.recordId;
-
-        setSelectedRecords((prev) => {
-          if (prev.some((r) => r.id === recordId)) {
-            return prev;
-          }
-
-          const newRecord: SelectedRecord = {
-            id: recordId,
-            displayText: `${t("record")} ${prev.length + 1}`,
-          };
-
-          return [...prev, newRecord];
-        });
-      }
-    });
-
-    return () => {
-      unsubscribe?.();
-    };
   }, [t]);
+
+  const refreshSelectedByCheckbox = async () => {
+    if (!table || !selectedFieldId) {
+      message.warning("未找到 'selected' 复选框字段或表格未加载");
+      return;
+    }
+    setLoading(true);
+    try {
+      let selection: { viewId?: string | null } = {};
+      try {
+        selection = (await bitable.base.getSelection()) || {};
+      } catch (e) {
+        console.warn("getSelection failed:", e);
+      }
+      let recordIdList: string[] = [];
+      if (selection.viewId) {
+        try {
+          const view = await table.getViewById(selection.viewId);
+          recordIdList = await view.getVisibleRecordIdList();
+        } catch (e) {
+          console.warn(
+            "getVisibleRecordIdList failed, fallback to all records",
+            e,
+          );
+        }
+      }
+      if (recordIdList.length === 0) {
+        recordIdList = await table.getRecordIdList();
+      }
+      const field = await table.getFieldById(selectedFieldId);
+      const newSelected: SelectedRecord[] = [];
+      let count = 1;
+      for (const recordId of recordIdList) {
+        const value = await field.getValue(recordId);
+        if (value === true) {
+          newSelected.push({
+            id: recordId,
+            displayText: `${t("record")} ${count++}`,
+          });
+        }
+      }
+      setSelectedRecords(newSelected);
+      setStatusMessage(
+        newSelected.length > 0
+          ? `${t("selectedRecords")}: ${newSelected.length} ${t("records")}`
+          : t("clickToSelect"),
+      );
+      setStatusType("info");
+      message.success(`已刷新，共选中 ${newSelected.length} 条记录`);
+    } catch (error) {
+      console.error("刷新选中记录失败:", error);
+      message.error("刷新失败");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const removeRecord = (recordId: string) => {
     setSelectedRecords((prev) => prev.filter((r) => r.id !== recordId));
@@ -110,130 +165,287 @@ function LoadApp() {
       message.warning(t("noRecordsSelected"));
       return;
     }
-
     if (!newTableName.trim()) {
       message.warning(t("enterTableName"));
       return;
     }
-
     setLoading(true);
     setStatusMessage(t("processing"));
     setStatusType("info");
 
     try {
-      const sourceTable = await bitable.base.getActiveTable();
-      const fieldMetaList = await sourceTable.getFieldMetaList();
-
+      let selection: { tableId?: string | null; viewId?: string | null } = {};
+      try {
+        selection = (await bitable.base.getSelection()) || {};
+      } catch (e) {
+        console.warn("getSelection failed, will fallback to active table:", e);
+      }
+      const sourceTable =
+        selection.tableId && selection.tableId !== null
+          ? await bitable.base.getTableById(selection.tableId)
+          : await bitable.base.getActiveTable();
+      const tableFieldMetaList: IFieldMeta[] =
+        await sourceTable.getFieldMetaList();
       const fieldCache: Map<string, any> = new Map();
-      for (const fieldMeta of fieldMetaList) {
+      for (const fieldMeta of tableFieldMetaList) {
         const field = await sourceTable.getFieldById(fieldMeta.id);
         fieldCache.set(fieldMeta.id, field);
       }
 
-      const { tableId } = await bitable.base.addTable({
-        name: newTableName.trim(),
-        fields: [],
-      } as any);
-
-      const newTable = await bitable.base.getTableById(tableId);
-
-      const skippedFields: string[] = [];
-
-      // 过滤出可复制的字段，保持原表顺序
-      const copiableFields = fieldMetaList.filter(
-        (fieldMeta) => !SKIP_FIELD_TYPES.includes(fieldMeta.type)
-      );
-
-      // 获取新表自动创建的默认索引字段
-      const initialFieldMetaList = await newTable.getFieldMetaList();
-      const defaultIndexField = initialFieldMetaList[0];
-
-      let isFirstFieldHandled = false;
-
-      for (let i = 0; i < copiableFields.length; i++) {
-        const fieldMeta = copiableFields[i];
-
+      let orderedFieldMetaList: IFieldMeta[] = tableFieldMetaList.slice();
+      if (selection.viewId) {
         try {
-          if (!isFirstFieldHandled && defaultIndexField) {
-            // 第一个可复制字段：修改默认索引字段的名称以匹配原表第一个字段
-            // 注意：索引字段必须是文本类型，所以我们只修改名称
-            const indexField = await newTable.getFieldById(defaultIndexField.id);
-            // 使用类型断言调用 setName 方法
-            await (indexField as any).setName(fieldMeta.name);
-            isFirstFieldHandled = true;
-          } else {
-            // 后续字段：按顺序添加
-            const fieldConfig: any = {
-              name: fieldMeta.name,
-              type: fieldMeta.type,
-            };
-
-            if ((fieldMeta as any).property) {
-              const property = { ...(fieldMeta as any).property };
-              delete property.fieldId;
-              delete property.tableId;
-              fieldConfig.property = property;
+          const view = await sourceTable.getViewById(selection.viewId);
+          if (view && typeof view.getFieldMetaList === "function") {
+            const viewFieldMetaList: IFieldMeta[] =
+              await view.getFieldMetaList();
+            if (viewFieldMetaList && viewFieldMetaList.length > 0) {
+              const nameToTableMeta = new Map<string, IFieldMeta>();
+              tableFieldMetaList.forEach((fm) =>
+                nameToTableMeta.set(fm.name, fm),
+              );
+              const inViewOrdered: IFieldMeta[] = [];
+              const addedNames = new Set<string>();
+              for (const vfm of viewFieldMetaList) {
+                const tm = nameToTableMeta.get(vfm.name);
+                if (tm) {
+                  inViewOrdered.push(tm);
+                  addedNames.add(tm.id);
+                } else {
+                  if ((vfm as any).id) {
+                    const tmById = tableFieldMetaList.find(
+                      (x) => x.id === (vfm as any).id,
+                    );
+                    if (tmById) {
+                      inViewOrdered.push(tmById);
+                      addedNames.add(tmById.id);
+                      continue;
+                    }
+                  }
+                  inViewOrdered.push(vfm);
+                  if ((vfm as any).id) addedNames.add((vfm as any).id);
+                }
+              }
+              for (const tm of tableFieldMetaList) {
+                if (!addedNames.has(tm.id)) {
+                  inViewOrdered.push(tm);
+                }
+              }
+              orderedFieldMetaList = inViewOrdered;
             }
-
-            await newTable.addField(fieldConfig);
           }
         } catch (e) {
-          console.warn(`Could not add field ${fieldMeta.name}:`, e);
-          skippedFields.push(fieldMeta.name);
+          console.warn(
+            "getViewById/getFieldMetaList failed, fallback to table fields:",
+            e,
+          );
         }
       }
 
-      // 记录被跳过的字段（计算字段等）
-      for (const fieldMeta of fieldMetaList) {
-        if (SKIP_FIELD_TYPES.includes(fieldMeta.type)) {
-          skippedFields.push(fieldMeta.name);
+      const skippedFields: string[] = [];
+      const initialFields: any[] = [];
+      let sourcePrimaryFieldId: string | null = null;
+      for (const fm of tableFieldMetaList) {
+        if ((fm as any).is_primary || (fm as any).isPrimary) {
+          sourcePrimaryFieldId = fm.id;
+          break;
+        }
+      }
+      if (!sourcePrimaryFieldId) {
+        for (const fm of orderedFieldMetaList) {
+          if (!SKIP_FIELD_TYPES.includes(fm.type)) {
+            sourcePrimaryFieldId = fm.id;
+            break;
+          }
+        }
+      }
+      const primaryFieldMeta = sourcePrimaryFieldId
+        ? tableFieldMetaList.find((f) => f.id === sourcePrimaryFieldId) || null
+        : null;
+
+      const buildFieldConfig = (fieldMeta: IFieldMeta) => {
+        const cfg: any = {
+          name: fieldMeta.name,
+          type: fieldMeta.type,
+        };
+        if ((fieldMeta as any).property) {
+          const prop = { ...(fieldMeta as any).property };
+          delete prop.fieldId;
+          delete prop.tableId;
+          cfg.property = prop;
+        }
+        return cfg;
+      };
+
+      if (primaryFieldMeta) {
+        try {
+          if (SKIP_FIELD_TYPES.includes(primaryFieldMeta.type)) {
+            skippedFields.push(primaryFieldMeta.name);
+          } else {
+            const primaryCfg = buildFieldConfig(primaryFieldMeta);
+            primaryCfg.is_primary = true;
+            primaryCfg.isPrimary = true;
+            initialFields.push(primaryCfg);
+          }
+        } catch (e) {
+          console.warn(
+            `Could not prepare primary field ${primaryFieldMeta.name}:`,
+            e,
+          );
+          skippedFields.push(primaryFieldMeta.name);
         }
       }
 
+      for (const fm of orderedFieldMetaList) {
+        if (fm.id === sourcePrimaryFieldId) continue;
+        if (SKIP_FIELD_TYPES.includes(fm.type)) {
+          skippedFields.push(fm.name);
+          continue;
+        }
+        try {
+          const cfg = buildFieldConfig(fm);
+          initialFields.push(cfg);
+        } catch (e) {
+          console.warn(`Could not prepare field ${fm.name}:`, e);
+          skippedFields.push(fm.name);
+        }
+      }
+
+      // 创建新表
+      const { tableId } = await bitable.base.addTable({
+        name: newTableName.trim(),
+        fields: initialFields,
+      } as any);
+      const newTable = await bitable.base.getTableById(tableId);
       const newFieldMetaList = await newTable.getFieldMetaList();
       const fieldNameToIdMap: Record<string, string> = {};
       newFieldMetaList.forEach((field) => {
         fieldNameToIdMap[field.name] = field.id;
       });
 
-      const recordsToAdd = [];
-      const recordIds = selectedRecords.map((r) => r.id);
-
-      for (const recordId of recordIds) {
-        try {
-          const recordData: Record<string, any> = {};
-
-          for (const fieldMeta of fieldMetaList) {
-            try {
-              const field = fieldCache.get(fieldMeta.id);
-              if (!field) continue;
-
-              const value = await field.getValue(recordId);
-
-              if (value !== null && value !== undefined) {
-                const newFieldId = fieldNameToIdMap[fieldMeta.name];
-                if (newFieldId) {
-                  recordData[newFieldId] = value;
-                }
-              }
-            } catch (fieldError) {
-              console.warn(
-                `Error getting field value for ${fieldMeta.name}:`,
-                fieldError,
-              );
-            }
-          }
-
-          if (Object.keys(recordData).length > 0) {
-            recordsToAdd.push({ fields: recordData });
-          }
-        } catch (recordError) {
-          console.warn(`Error processing record ${recordId}:`, recordError);
+      // 缓存新表的单选/多选类型化字段
+      const newSingleSelectFields: Map<string, IOpenSingleSelectField> =
+        new Map();
+      const newMultiSelectFields: Map<string, IOpenMultiSelectField> =
+        new Map();
+      for (const meta of newFieldMetaList) {
+        if (meta.type === FieldType.SingleSelect) {
+          const field = await newTable.getField<IOpenSingleSelectField>(
+            meta.id,
+          );
+          newSingleSelectFields.set(meta.name, field);
+        } else if (meta.type === FieldType.MultiSelect) {
+          const field = await newTable.getField<IOpenMultiSelectField>(meta.id);
+          newMultiSelectFields.set(meta.name, field);
         }
       }
 
-      if (recordsToAdd.length > 0) {
-        await newTable.addRecords(recordsToAdd);
+      // 准备记录数据和单选/多选值缓存
+      const recordsToAdd: any[] = [];
+      const sourceRecordIds = selectedRecords.map((r) => r.id);
+      const sourceSelectValues: Array<{
+        single: Record<string, string>;
+        multi: Record<string, string[]>;
+      }> = [];
+
+      for (const recordId of sourceRecordIds) {
+        const recordData: Record<string, any> = {};
+        const singleValues: Record<string, string> = {};
+        const multiValues: Record<string, string[]> = {};
+
+        for (const fieldMeta of tableFieldMetaList) {
+          try {
+            const field = fieldCache.get(fieldMeta.id);
+            if (!field) continue;
+            let value = await field.getValue(recordId);
+
+            // 收集单选值
+            if (fieldMeta.type === FieldType.SingleSelect) {
+              if (value !== null && value !== undefined) {
+                const text =
+                  typeof value === "object"
+                    ? (value.text ?? String(value))
+                    : String(value);
+                singleValues[fieldMeta.name] = text;
+              }
+            } else if (fieldMeta.type === FieldType.MultiSelect) {
+              if (Array.isArray(value)) {
+                const texts = value.map((opt: any) =>
+                  typeof opt === "object"
+                    ? (opt.text ?? String(opt))
+                    : String(opt),
+                );
+                multiValues[fieldMeta.name] = texts;
+              }
+            }
+
+            // selected 强制 false
+            if (
+              fieldMeta.id === selectedFieldId &&
+              fieldMeta.type === FieldType.Checkbox
+            ) {
+              value = false;
+            }
+
+            // 只写入非单选/多选字段
+            if (
+              fieldMeta.type !== FieldType.SingleSelect &&
+              fieldMeta.type !== FieldType.MultiSelect &&
+              value !== null &&
+              value !== undefined
+            ) {
+              const newFieldId = fieldNameToIdMap[fieldMeta.name];
+              if (newFieldId) {
+                recordData[newFieldId] = value;
+              }
+            }
+          } catch (e) {
+            console.warn(`Error reading field ${fieldMeta.name}`, e);
+          }
+        }
+
+        sourceSelectValues.push({ single: singleValues, multi: multiValues });
+        recordsToAdd.push({ fields: recordData });
+      }
+
+      // 批量添加记录
+      const addResult = (await newTable.addRecords(recordsToAdd)) as any;
+      const newRecordIds: string[] = Array.isArray(addResult)
+        ? addResult
+        : (addResult?.recordIds ?? []);
+
+      // 使用 setValue 写入单选/多选值
+      for (
+        let i = 0;
+        i < newRecordIds.length && i < sourceSelectValues.length;
+        i++
+      ) {
+        const newRecordId = newRecordIds[i];
+        const { single, multi } = sourceSelectValues[i];
+
+        // 写入单选
+        for (const [fieldName, text] of Object.entries(single)) {
+          const field = newSingleSelectFields.get(fieldName);
+          if (field && text) {
+            try {
+              await field.setValue(newRecordId, text);
+            } catch (e) {
+              console.warn(`Failed to set single select ${fieldName}`, e);
+            }
+          }
+        }
+
+        // 写入多选
+        for (const [fieldName, texts] of Object.entries(multi)) {
+          const field = newMultiSelectFields.get(fieldName);
+          if (field && texts.length > 0) {
+            try {
+              await field.setValue(newRecordId, texts);
+            } catch (e) {
+              console.warn(`Failed to set multi select ${fieldName}`, e);
+            }
+          }
+        }
       }
 
       let successMsg = t("successMessage", {
@@ -248,7 +460,6 @@ function LoadApp() {
       setStatusMessage(successMsg);
       setStatusType("success");
       message.success(t("operationSuccess"));
-
       setSelectedRecords([]);
     } catch (error) {
       console.error("Error copying records:", error);
@@ -265,13 +476,23 @@ function LoadApp() {
       <Card>
         <Space direction="vertical" style={{ width: "100%" }} size="middle">
           <Title level={4}>{t("title")}</Title>
-
           <Alert message={statusMessage} type={statusType} showIcon />
-
           <div>
             <Text strong>{t("currentTable")}: </Text>
             <Text>{tableName}</Text>
           </div>
+
+          {selectedFieldId && (
+            <Button
+              type="dashed"
+              onClick={refreshSelectedByCheckbox}
+              loading={loading}
+              block
+              style={{ marginBottom: 12 }}
+            >
+              刷新选中记录（根据 "selected" 复选框）
+            </Button>
+          )}
 
           <div>
             <div
@@ -296,7 +517,6 @@ function LoadApp() {
                 </Button>
               )}
             </div>
-
             {selectedRecords.length > 0 ? (
               <div
                 style={{
@@ -319,10 +539,13 @@ function LoadApp() {
                 ))}
               </div>
             ) : (
-              <Text type="secondary">{t("clickToSelect")}</Text>
+              <Text type="secondary">
+                {selectedFieldId
+                  ? "请在表格中勾选 'selected' 复选框后点击上方刷新按钮"
+                  : t("clickToSelect")}
+              </Text>
             )}
           </div>
-
           <div>
             <Text strong>{t("newTableName")}: </Text>
             <Input
@@ -332,7 +555,6 @@ function LoadApp() {
               style={{ width: "100%", marginTop: 4 }}
             />
           </div>
-
           <Button
             type="primary"
             onClick={copyToNewTable}
@@ -344,7 +566,6 @@ function LoadApp() {
           </Button>
         </Space>
       </Card>
-
       {loading && (
         <div
           style={{
