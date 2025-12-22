@@ -472,54 +472,55 @@ function LoadApp() {
               value !== null &&
               value !== undefined
             ) {
-              // 提取 URL - 飞书URL字段可能返回对象或字符串
+              // 提取 URL - getValue() 返回数组或对象或字符串
               let tableUrl = "";
+              
+              console.log(`[Coze] Raw value from cost_breakdown field:`, JSON.stringify(value).substring(0, 200));
+              
               if (typeof value === "string") {
+                // 情况1: 直接是字符串
                 tableUrl = value;
+              } else if (Array.isArray(value) && value.length > 0) {
+                // 情况2: 是数组，提取第一个元素的 link
+                const firstItem = value[0];
+                if (typeof firstItem === "object" && firstItem.link && typeof firstItem.link === "string") {
+                  tableUrl = firstItem.link;
+                  console.log(`[Coze] Extracted link from array[0]:`, tableUrl.substring(0, 60));
+                } else {
+                  console.warn(`[Coze] Array item doesn't have link property:`, firstItem);
+                }
               } else if (typeof value === "object" && value !== null) {
-                // 尝试从对象中提取URL - 检查常见属性
+                // 情况3: 是对象，检查常见属性
                 if (value.link && typeof value.link === "string") {
                   tableUrl = value.link;
                 } else if (value.url && typeof value.url === "string") {
                   tableUrl = value.url;
                 } else if (value.href && typeof value.href === "string") {
                   tableUrl = value.href;
-                } else if (value.text && typeof value.text === "string") {
-                  tableUrl = value.text;
-                } else {
-                  // 如果找不到属性，尝试序列化
-                  try {
-                    tableUrl = JSON.stringify(value);
-                  } catch {
-                    tableUrl = String(value);
-                  }
                 }
-                console.log(`[Coze] Extracted URL from object. Original:`, value, "Extracted:", tableUrl.substring(0, 50));
-              } else {
-                tableUrl = String(value).trim();
+                console.log(`[Coze] Extracted URL from object:`, tableUrl.substring(0, 60));
               }
               
-              // 确保 tableUrl 是非空字符串
-              if (!tableUrl || tableUrl === "[object Object]") {
-                console.warn(`[Coze] Invalid URL extracted:`, tableUrl, "using original value");
-                tableUrl = String(value).trim();
+              // 验证 tableUrl 是有效的链接
+              if (!tableUrl || !tableUrl.includes("feishu")) {
+                console.warn(`[Coze] Invalid table URL extracted:`, tableUrl);
+                continue;
               }
               
-              console.log(`[Coze] Final tableUrl for API: ${tableUrl.substring(0, 60)}...`);
+              console.log(`[Coze] Sending to Coze API: ${tableUrl.substring(0, 60)}...`);
               const duplicatedTableUrl = await duplicateTableWithCoze(tableUrl);
+              console.log(`[Coze] Coze returned:`, duplicatedTableUrl ? duplicatedTableUrl.substring(0, 60) : "null");
               
-              const newFieldId =
-                fieldNameToIdMap[costBreakdownFieldMeta.name];
+              const newFieldId = fieldNameToIdMap[costBreakdownFieldMeta.name];
               if (newFieldId) {
-                // 使用复制的URL，如果失败则使用原始URL
-                const finalUrl = (duplicatedTableUrl || tableUrl || "").trim();
+                // 使用 Coze 返回的副本URL，如果失败则使用原始URL
+                const finalUrl = duplicatedTableUrl || tableUrl;
                 
-                // 确保最终URL是字符串且不是[object Object]
-                if (finalUrl && typeof finalUrl === "string" && finalUrl !== "[object Object]") {
+                if (finalUrl && typeof finalUrl === "string") {
                   recordData[newFieldId] = finalUrl;
-                  console.log(`[Coze] Record data set with: ${finalUrl.substring(0, 60)}... (type: ${typeof finalUrl})`);
+                  console.log(`[Coze] Writing to new record: ${finalUrl.substring(0, 60)}...`);
                 } else {
-                  console.warn(`[Coze] Invalid final URL, skipping this field:`, finalUrl);
+                  console.warn(`[Coze] No valid URL to write`);
                 }
               }
               continue;
