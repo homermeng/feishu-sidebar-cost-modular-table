@@ -4,8 +4,8 @@ import {
   bitable,
   IFieldMeta,
   FieldType,
-  IOpenSingleSelectField,
-  IOpenMultiSelectField,
+  ISingleSelectField,
+  IMultiSelectField,
 } from "@lark-base-open/js-sdk";
 import {
   Button,
@@ -19,6 +19,7 @@ import {
   Tag,
 } from "antd";
 import { useTranslation } from "react-i18next";
+import { CozeAPI } from "@coze/api";
 import "./i18n";
 
 const { Title, Text } = Typography;
@@ -158,6 +159,58 @@ function LoadApp() {
     setSelectedRecords([]);
     setStatusMessage(t("selectionCleared"));
     setStatusType("info");
+  };
+
+  // Coze API helper function to duplicate a table
+  const duplicateTableWithCoze = async (tableUrl: string): Promise<string | null> => {
+    try {
+      // Try to get token from window object (will be injected at runtime)
+      const token = (window as any).__COZE_API_TOKEN || (window as any).COZE_API_TOKEN;
+      if (!token) {
+        console.error("COZE_API_TOKEN not found. Please set it in your environment.");
+        message.error("Coze API Token 未配置，无法复制表格");
+        return null;
+      }
+
+      const apiClient = new CozeAPI({
+        token,
+        baseURL: "https://api.coze.cn",
+      });
+
+      // Fixed input folder URL
+      const inputFolderUrl =
+        "https://ycnlvj3d3e9f.feishu.cn/drive/folder/EZu5fIkOBlPg89dPa65c9QvXnue?from=space_personal_filelist&fromShareWithMeNew=1";
+
+      const res = await apiClient.workflows.runs.stream({
+        workflow_id: "7585399127100981254",
+        parameters: {
+          input_folder_url: inputFolderUrl,
+          input_table_url: tableUrl,
+        },
+      });
+
+      // Extract output URL from response
+      for await (const event of res as any) {
+        if (event?.message && typeof event.message === "object") {
+          const msg = event.message as any;
+          if (msg.node_title === "End" && msg.content) {
+            try {
+              const contentObj = JSON.parse(msg.content);
+              if (contentObj.output) {
+                return contentObj.output;
+              }
+            } catch (parseError) {
+              console.warn("Failed to parse content:", parseError);
+            }
+          }
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error("Error calling Coze API to duplicate table:", error);
+      return null;
+    }
   };
 
   const copyToNewTable = async () => {
@@ -324,21 +377,26 @@ function LoadApp() {
       });
 
       // 缓存新表的单选/多选类型化字段
-      const newSingleSelectFields: Map<string, IOpenSingleSelectField> =
+      const newSingleSelectFields: Map<string, ISingleSelectField> =
         new Map();
-      const newMultiSelectFields: Map<string, IOpenMultiSelectField> =
+      const newMultiSelectFields: Map<string, IMultiSelectField> =
         new Map();
       for (const meta of newFieldMetaList) {
         if (meta.type === FieldType.SingleSelect) {
-          const field = await newTable.getField<IOpenSingleSelectField>(
+          const field = await newTable.getField<ISingleSelectField>(
             meta.id,
           );
           newSingleSelectFields.set(meta.name, field);
         } else if (meta.type === FieldType.MultiSelect) {
-          const field = await newTable.getField<IOpenMultiSelectField>(meta.id);
+          const field = await newTable.getField<IMultiSelectField>(meta.id);
           newMultiSelectFields.set(meta.name, field);
         }
       }
+
+      // 找出cost_breakdown字段
+      const costBreakdownFieldMeta = tableFieldMetaList.find(
+        (f) => f.name.toLowerCase() === "cost_breakdown"
+      );
 
       // 准备记录数据和单选/多选值缓存
       const recordsToAdd: any[] = [];
@@ -358,6 +416,26 @@ function LoadApp() {
             const field = fieldCache.get(fieldMeta.id);
             if (!field) continue;
             let value = await field.getValue(recordId);
+
+            // 特殊处理 cost_breakdown 字段：调用 Coze API 创建表格副本
+            if (
+              costBreakdownFieldMeta &&
+              fieldMeta.id === costBreakdownFieldMeta.id &&
+              value !== null &&
+              value !== undefined
+            ) {
+              const tableUrl = typeof value === "string" ? value : String(value);
+              console.log(`Duplicating table from URL: ${tableUrl}`);
+              const duplicatedTableUrl = await duplicateTableWithCoze(tableUrl);
+              if (duplicatedTableUrl) {
+                const newFieldId =
+                  fieldNameToIdMap[costBreakdownFieldMeta.name];
+                if (newFieldId) {
+                  recordData[newFieldId] = duplicatedTableUrl;
+                }
+              }
+              continue;
+            }
 
             // 收集单选值
             if (fieldMeta.type === FieldType.SingleSelect) {
