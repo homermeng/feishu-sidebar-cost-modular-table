@@ -472,18 +472,55 @@ function LoadApp() {
               value !== null &&
               value !== undefined
             ) {
-              const tableUrl =
-                typeof value === "string" ? value : String(value);
-              console.log(`[Coze] Duplicating table from URL: ${tableUrl.substring(0, 50)}...`);
+              // 提取 URL - 飞书URL字段可能返回对象或字符串
+              let tableUrl = "";
+              if (typeof value === "string") {
+                tableUrl = value;
+              } else if (typeof value === "object" && value !== null) {
+                // 尝试从对象中提取URL - 检查常见属性
+                if (value.link && typeof value.link === "string") {
+                  tableUrl = value.link;
+                } else if (value.url && typeof value.url === "string") {
+                  tableUrl = value.url;
+                } else if (value.href && typeof value.href === "string") {
+                  tableUrl = value.href;
+                } else if (value.text && typeof value.text === "string") {
+                  tableUrl = value.text;
+                } else {
+                  // 如果找不到属性，尝试序列化
+                  try {
+                    tableUrl = JSON.stringify(value);
+                  } catch {
+                    tableUrl = String(value);
+                  }
+                }
+                console.log(`[Coze] Extracted URL from object. Original:`, value, "Extracted:", tableUrl.substring(0, 50));
+              } else {
+                tableUrl = String(value).trim();
+              }
+              
+              // 确保 tableUrl 是非空字符串
+              if (!tableUrl || tableUrl === "[object Object]") {
+                console.warn(`[Coze] Invalid URL extracted:`, tableUrl, "using original value");
+                tableUrl = String(value).trim();
+              }
+              
+              console.log(`[Coze] Final tableUrl for API: ${tableUrl.substring(0, 60)}...`);
               const duplicatedTableUrl = await duplicateTableWithCoze(tableUrl);
               
               const newFieldId =
                 fieldNameToIdMap[costBreakdownFieldMeta.name];
               if (newFieldId) {
-                // Use duplicated URL if successful, otherwise use original URL
-                const finalUrl = duplicatedTableUrl || tableUrl;
-                recordData[newFieldId] = finalUrl;
-                console.log(`[Coze] Record will use: ${duplicatedTableUrl ? "duplicated" : "original"} URL`);
+                // 使用复制的URL，如果失败则使用原始URL
+                const finalUrl = (duplicatedTableUrl || tableUrl || "").trim();
+                
+                // 确保最终URL是字符串且不是[object Object]
+                if (finalUrl && typeof finalUrl === "string" && finalUrl !== "[object Object]") {
+                  recordData[newFieldId] = finalUrl;
+                  console.log(`[Coze] Record data set with: ${finalUrl.substring(0, 60)}... (type: ${typeof finalUrl})`);
+                } else {
+                  console.warn(`[Coze] Invalid final URL, skipping this field:`, finalUrl);
+                }
               }
               continue;
             }
