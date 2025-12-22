@@ -199,31 +199,58 @@ function LoadApp() {
 
       // Extract output URL from response
       for await (const event of res as any) {
-        console.log("[Coze] Event:", JSON.stringify(event).substring(0, 200));
+        console.log("[Coze] Full event:", JSON.stringify(event).substring(0, 500));
         
         // Try both event.message and direct event structure
         const messageData = event?.message || event;
         
         if (messageData && typeof messageData === "object") {
           const msg = messageData as any;
+          console.log("[Coze] Message node_title:", msg.node_title, "node_id:", msg.node_id);
           
           // Check for End node
           if (msg.node_title === "End" || msg.node_id === 900001) {
+            console.log("[Coze] Found End node, content type:", typeof msg.content);
             if (msg.content) {
               try {
                 let contentData = msg.content;
+                
+                // Parse content if it's a string
                 if (typeof contentData === "string") {
+                  console.log("[Coze] Parsing string content:", contentData.substring(0, 200));
                   contentData = JSON.parse(contentData);
+                } else {
+                  console.log("[Coze] Content is already an object:", contentData);
                 }
                 
-                console.log("[Coze] Content parsed:", contentData);
+                console.log("[Coze] Final contentData:", JSON.stringify(contentData).substring(0, 300));
                 
-                if (contentData.output) {
-                  console.log("[Coze] Output found:", contentData.output.substring(0, 50));
-                  return contentData.output;
+                // Extract output - ensure it's a string URL
+                let outputUrl: string | null = null;
+                
+                if (typeof contentData === "string") {
+                  // contentData is already the URL string
+                  outputUrl = contentData;
+                } else if (contentData.output) {
+                  // Extract output field and force to string
+                  if (typeof contentData.output === "string") {
+                    outputUrl = contentData.output;
+                  } else if (typeof contentData.output === "object") {
+                    // If it's an object, convert to string
+                    outputUrl = String(contentData.output);
+                  }
+                }
+                
+                // Final validation: ensure we have a string URL
+                if (outputUrl && typeof outputUrl === "string" && outputUrl.includes("feishu")) {
+                  console.log("[Coze] Successfully extracted URL:", outputUrl.substring(0, 50));
+                  return outputUrl;
+                } else {
+                  console.warn("[Coze] Could not extract valid URL, got:", outputUrl);
+                  console.log("[Coze] Full contentData for debugging:", JSON.stringify(contentData));
                 }
               } catch (parseError) {
-                console.warn("[Coze] Parse error:", parseError);
+                console.warn("[Coze] Parse error:", parseError, "content was:", msg.content);
               }
             }
           }
