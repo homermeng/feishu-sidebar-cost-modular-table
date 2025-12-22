@@ -1,3 +1,5 @@
+(window as any).__COZE_API_TOKEN =
+  "sat_IInQlOyLHwxM0IsOEbi3WETZ1pe77AIdTQ9aOtc6Lb9bJPrmCBzmL7ybSfdk0gmd";
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import {
@@ -162,15 +164,21 @@ function LoadApp() {
   };
 
   // Coze API helper function to duplicate a table
-  const duplicateTableWithCoze = async (tableUrl: string): Promise<string | null> => {
+  const duplicateTableWithCoze = async (
+    tableUrl: string,
+  ): Promise<string | null> => {
     try {
       // Try to get token from window object (will be injected at runtime)
-      const token = (window as any).__COZE_API_TOKEN || (window as any).COZE_API_TOKEN;
+      const token =
+        (window as any).__COZE_API_TOKEN || (window as any).COZE_API_TOKEN;
       if (!token) {
-        console.error("COZE_API_TOKEN not found. Please set it in your environment.");
-        message.error("Coze API Token 未配置，无法复制表格");
+        console.warn(
+          "[Coze] COZE_API_TOKEN not found. Using original URL.",
+        );
         return null;
       }
+
+      console.log(`[Coze] Starting duplication for: ${tableUrl.substring(0, 50)}...`);
 
       const apiClient = new CozeAPI({
         token,
@@ -191,24 +199,41 @@ function LoadApp() {
 
       // Extract output URL from response
       for await (const event of res as any) {
-        if (event?.message && typeof event.message === "object") {
-          const msg = event.message as any;
-          if (msg.node_title === "End" && msg.content) {
-            try {
-              const contentObj = JSON.parse(msg.content);
-              if (contentObj.output) {
-                return contentObj.output;
+        console.log("[Coze] Event:", JSON.stringify(event).substring(0, 200));
+        
+        // Try both event.message and direct event structure
+        const messageData = event?.message || event;
+        
+        if (messageData && typeof messageData === "object") {
+          const msg = messageData as any;
+          
+          // Check for End node
+          if (msg.node_title === "End" || msg.node_id === 900001) {
+            if (msg.content) {
+              try {
+                let contentData = msg.content;
+                if (typeof contentData === "string") {
+                  contentData = JSON.parse(contentData);
+                }
+                
+                console.log("[Coze] Content parsed:", contentData);
+                
+                if (contentData.output) {
+                  console.log("[Coze] Output found:", contentData.output.substring(0, 50));
+                  return contentData.output;
+                }
+              } catch (parseError) {
+                console.warn("[Coze] Parse error:", parseError);
               }
-            } catch (parseError) {
-              console.warn("Failed to parse content:", parseError);
             }
           }
         }
       }
 
+      console.warn("[Coze] No output URL found in response");
       return null;
     } catch (error) {
-      console.error("Error calling Coze API to duplicate table:", error);
+      console.error("[Coze] Error:", error);
       return null;
     }
   };
@@ -377,15 +402,11 @@ function LoadApp() {
       });
 
       // 缓存新表的单选/多选类型化字段
-      const newSingleSelectFields: Map<string, ISingleSelectField> =
-        new Map();
-      const newMultiSelectFields: Map<string, IMultiSelectField> =
-        new Map();
+      const newSingleSelectFields: Map<string, ISingleSelectField> = new Map();
+      const newMultiSelectFields: Map<string, IMultiSelectField> = new Map();
       for (const meta of newFieldMetaList) {
         if (meta.type === FieldType.SingleSelect) {
-          const field = await newTable.getField<ISingleSelectField>(
-            meta.id,
-          );
+          const field = await newTable.getField<ISingleSelectField>(meta.id);
           newSingleSelectFields.set(meta.name, field);
         } else if (meta.type === FieldType.MultiSelect) {
           const field = await newTable.getField<IMultiSelectField>(meta.id);
@@ -395,7 +416,7 @@ function LoadApp() {
 
       // 找出cost_breakdown字段
       const costBreakdownFieldMeta = tableFieldMetaList.find(
-        (f) => f.name.toLowerCase() === "cost_breakdown"
+        (f) => f.name.toLowerCase() === "cost_breakdown",
       );
 
       // 准备记录数据和单选/多选值缓存
@@ -424,15 +445,18 @@ function LoadApp() {
               value !== null &&
               value !== undefined
             ) {
-              const tableUrl = typeof value === "string" ? value : String(value);
-              console.log(`Duplicating table from URL: ${tableUrl}`);
+              const tableUrl =
+                typeof value === "string" ? value : String(value);
+              console.log(`[Coze] Duplicating table from URL: ${tableUrl.substring(0, 50)}...`);
               const duplicatedTableUrl = await duplicateTableWithCoze(tableUrl);
-              if (duplicatedTableUrl) {
-                const newFieldId =
-                  fieldNameToIdMap[costBreakdownFieldMeta.name];
-                if (newFieldId) {
-                  recordData[newFieldId] = duplicatedTableUrl;
-                }
+              
+              const newFieldId =
+                fieldNameToIdMap[costBreakdownFieldMeta.name];
+              if (newFieldId) {
+                // Use duplicated URL if successful, otherwise use original URL
+                const finalUrl = duplicatedTableUrl || tableUrl;
+                recordData[newFieldId] = finalUrl;
+                console.log(`[Coze] Record will use: ${duplicatedTableUrl ? "duplicated" : "original"} URL`);
               }
               continue;
             }
