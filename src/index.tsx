@@ -7,8 +7,8 @@ import {
   bitable,
   IFieldMeta,
   FieldType,
-  IOpenSingleSelectField,
-  IOpenMultiSelectField,
+  ISingleSelectField,
+  IMultiSelectField,
 } from "@lark-base-open/js-sdk";
 import {
   Button,
@@ -349,14 +349,14 @@ function LoadApp() {
       });
 
       // 单选/多选字段缓存
-      const newSingleSelectFields = new Map<string, IOpenSingleSelectField>();
-      const newMultiSelectFields = new Map<string, IOpenMultiSelectField>();
+      const newSingleSelectFields = new Map<string, ISingleSelectField>();
+      const newMultiSelectFields = new Map<string, IMultiSelectField >();
       for (const meta of newFieldMetaList) {
         if (meta.type === FieldType.SingleSelect) {
-          const field = await newTable.getField<IOpenSingleSelectField>(meta.id);
+          const field = await newTable.getField<ISingleSelectField>(meta.id);
           newSingleSelectFields.set(meta.name, field);
         } else if (meta.type === FieldType.MultiSelect) {
-          const field = await newTable.getField<IOpenMultiSelectField>(meta.id);
+          const field = await newTable.getField<IMultiSelectField >(meta.id);
           newMultiSelectFields.set(meta.name, field);
         }
       }
