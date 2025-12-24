@@ -1,13 +1,14 @@
-(window as any).__COZE_API_TOKEN =
-  "sat_IInQlOyLHwxM0IsOEbi3WETZ1pe77AIdTQ9aOtc6Lb9bJPrmCBzmL7ybSfdk0gmd";
+// Coze Token 注入（请确保 Token 有效）
+(window as any).__COZE_API_TOKEN = "sat_IInQlOyLHwxM0IsOEbi3WETZ1pe77AIdTQ9aOtc6Lb9bJPrmCBzmL7ybSfdk0gmd";
+
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import {
   bitable,
   IFieldMeta,
   FieldType,
-  ISingleSelectField,
-  IMultiSelectField,
+  IOpenSingleSelectField,
+  IOpenMultiSelectField,
 } from "@lark-base-open/js-sdk";
 import {
   Button,
@@ -21,7 +22,6 @@ import {
   Tag,
 } from "antd";
 import { useTranslation } from "react-i18next";
-import { CozeAPI } from "@coze/api";
 import "./i18n";
 
 const { Title, Text } = Typography;
@@ -44,7 +44,7 @@ interface SelectedRecord {
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <LoadApp />
-  </React.StrictMode>,
+  </React.StrictMode>
 );
 
 function LoadApp() {
@@ -54,9 +54,7 @@ function LoadApp() {
   const [selectedRecords, setSelectedRecords] = useState<SelectedRecord[]>([]);
   const [newTableName, setNewTableName] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
-  const [statusType, setStatusType] = useState<"info" | "success" | "error">(
-    "info",
-  );
+  const [statusType, setStatusType] = useState<"info" | "success" | "error">("info");
 
   const [table, setTable] = useState<any>(null);
   const [selectedFieldId, setSelectedFieldId] = useState<string | null>(null);
@@ -74,9 +72,7 @@ function LoadApp() {
 
         const fieldMetaList = await currentTable.getFieldMetaList();
         const selectedMeta = fieldMetaList.find(
-          (f) =>
-            f.name.toLowerCase() === "selected" &&
-            f.type === FieldType.Checkbox,
+          (f) => f.name.toLowerCase() === "selected" && f.type === FieldType.Checkbox
         );
         if (selectedMeta) {
           setSelectedFieldId(selectedMeta.id);
@@ -85,13 +81,8 @@ function LoadApp() {
         }
       } catch (error: any) {
         console.error("Init error:", error);
-        if (error?.message === "time out" || error === "time out") {
-          setStatusMessage(t("notInFeishu"));
-          setStatusType("info");
-        } else {
-          setStatusMessage(t("initError"));
-          setStatusType("error");
-        }
+        setStatusMessage(t("initError"));
+        setStatusType("error");
       }
     };
     init();
@@ -116,10 +107,7 @@ function LoadApp() {
           const view = await table.getViewById(selection.viewId);
           recordIdList = await view.getVisibleRecordIdList();
         } catch (e) {
-          console.warn(
-            "getVisibleRecordIdList failed, fallback to all records",
-            e,
-          );
+          console.warn("getVisibleRecordIdList failed", e);
         }
       }
       if (recordIdList.length === 0) {
@@ -141,12 +129,12 @@ function LoadApp() {
       setStatusMessage(
         newSelected.length > 0
           ? `${t("selectedRecords")}: ${newSelected.length} ${t("records")}`
-          : t("clickToSelect"),
+          : t("clickToSelect")
       );
       setStatusType("info");
       message.success(`已刷新，共选中 ${newSelected.length} 条记录`);
     } catch (error) {
-      console.error("刷新选中记录失败:", error);
+      console.error("刷新失败:", error);
       message.error("刷新失败");
     } finally {
       setLoading(false);
@@ -163,106 +151,54 @@ function LoadApp() {
     setStatusType("info");
   };
 
-  // Coze API helper function to duplicate a table
-  const duplicateTableWithCoze = async (
-    tableUrl: string,
-  ): Promise<string | null> => {
-    try {
-      // Try to get token from window object (will be injected at runtime)
-      const token =
-        (window as any).__COZE_API_TOKEN || (window as any).COZE_API_TOKEN;
-      if (!token) {
-        console.warn(
-          "[Coze] COZE_API_TOKEN not found. Using original URL.",
-        );
-        return null;
-      }
+  // 同步等待 Coze 返回新副本 URL（已修复解析 result.data 字符串）
+  const getDuplicatedTableUrlFromCoze = async (originalUrl: string): Promise<string> => {
+    const token = (window as any).__COZE_API_TOKEN;
+    if (!token) throw new Error("Coze Token 未配置");
 
-      console.log(`[Coze] Starting duplication for: ${tableUrl.substring(0, 50)}...`);
+    const inputFolderUrl = "https://ycnlvj3d3e9f.feishu.cn/drive/folder/EZu5fIkOBlPg89dPa65c9QvXnue?from=space_personal_filelist&fromShareWithMeNew=1";
 
-      const apiClient = new CozeAPI({
-        token,
-        baseURL: "https://api.coze.cn",
-      });
-
-      // Fixed input folder URL
-      const inputFolderUrl =
-        "https://ycnlvj3d3e9f.feishu.cn/drive/folder/EZu5fIkOBlPg89dPa65c9QvXnue?from=space_personal_filelist&fromShareWithMeNew=1";
-
-      const res = await apiClient.workflows.runs.stream({
+    const response = await fetch("https://api.coze.cn/v1/workflow/run", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
         workflow_id: "7585399127100981254",
         parameters: {
           input_folder_url: inputFolderUrl,
-          input_table_url: tableUrl,
+          input_table_url: originalUrl.trim(),
         },
-      });
+      }),
+    });
 
-      // Extract output URL from response
-      for await (const event of res as any) {
-        console.log("[Coze] Full event:", JSON.stringify(event).substring(0, 500));
-        
-        // Try both event.message and direct event structure
-        const messageData = event?.message || event;
-        
-        if (messageData && typeof messageData === "object") {
-          const msg = messageData as any;
-          console.log("[Coze] Message node_title:", msg.node_title, "node_id:", msg.node_id);
-          
-          // Check for End node
-          if (msg.node_title === "End" || msg.node_id === 900001) {
-            console.log("[Coze] Found End node, content type:", typeof msg.content);
-            if (msg.content) {
-              try {
-                let contentData = msg.content;
-                
-                // Parse content if it's a string
-                if (typeof contentData === "string") {
-                  console.log("[Coze] Parsing string content:", contentData.substring(0, 200));
-                  contentData = JSON.parse(contentData);
-                } else {
-                  console.log("[Coze] Content is already an object:", contentData);
-                }
-                
-                console.log("[Coze] Final contentData:", JSON.stringify(contentData).substring(0, 300));
-                
-                // Extract output - ensure it's a string URL
-                let outputUrl: string | null = null;
-                
-                if (typeof contentData === "string") {
-                  // contentData is already the URL string
-                  outputUrl = contentData;
-                } else if (contentData.output) {
-                  // Extract output field and force to string
-                  if (typeof contentData.output === "string") {
-                    outputUrl = contentData.output;
-                  } else if (typeof contentData.output === "object") {
-                    // If it's an object, convert to string
-                    outputUrl = String(contentData.output);
-                  }
-                }
-                
-                // Final validation: ensure we have a string URL
-                if (outputUrl && typeof outputUrl === "string" && outputUrl.includes("feishu")) {
-                  console.log("[Coze] Successfully extracted URL:", outputUrl.substring(0, 50));
-                  return outputUrl;
-                } else {
-                  console.warn("[Coze] Could not extract valid URL, got:", outputUrl);
-                  console.log("[Coze] Full contentData for debugging:", JSON.stringify(contentData));
-                }
-              } catch (parseError) {
-                console.warn("[Coze] Parse error:", parseError, "content was:", msg.content);
-              }
-            }
-          }
-        }
-      }
-
-      console.warn("[Coze] No output URL found in response");
-      return null;
-    } catch (error) {
-      console.error("[Coze] Error:", error);
-      return null;
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Coze 调用失败: ${response.status} ${errText}`);
     }
+
+    const result = await response.json();
+
+    // 修复：URL 在 result.data 字段，是 JSON 字符串
+    const dataStr = result.data;
+    if (typeof dataStr !== "string") {
+      throw new Error("Coze 返回的 data 不是字符串");
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(dataStr);
+    } catch (e) {
+      throw new Error("解析 Coze data 字符串失败: " + dataStr);
+    }
+
+    const newUrl = parsed.output || "";
+    if (!newUrl || !newUrl.includes("feishu.cn")) {
+      throw new Error("Coze 返回无效 URL: " + newUrl);
+    }
+
+    return newUrl;
   };
 
   const copyToNewTable = async () => {
@@ -274,8 +210,9 @@ function LoadApp() {
       message.warning(t("enterTableName"));
       return;
     }
+
     setLoading(true);
-    setStatusMessage(t("processing"));
+    setStatusMessage("正在复制主表...");
     setStatusType("info");
 
     try {
@@ -283,32 +220,30 @@ function LoadApp() {
       try {
         selection = (await bitable.base.getSelection()) || {};
       } catch (e) {
-        console.warn("getSelection failed, will fallback to active table:", e);
+        console.warn("getSelection failed:", e);
       }
       const sourceTable =
-        selection.tableId && selection.tableId !== null
+        selection.tableId
           ? await bitable.base.getTableById(selection.tableId)
           : await bitable.base.getActiveTable();
-      const tableFieldMetaList: IFieldMeta[] =
-        await sourceTable.getFieldMetaList();
+
+      const tableFieldMetaList: IFieldMeta[] = await sourceTable.getFieldMetaList();
       const fieldCache: Map<string, any> = new Map();
       for (const fieldMeta of tableFieldMetaList) {
         const field = await sourceTable.getFieldById(fieldMeta.id);
         fieldCache.set(fieldMeta.id, field);
       }
 
+      // 完整的视图字段顺序调整
       let orderedFieldMetaList: IFieldMeta[] = tableFieldMetaList.slice();
       if (selection.viewId) {
         try {
           const view = await sourceTable.getViewById(selection.viewId);
           if (view && typeof view.getFieldMetaList === "function") {
-            const viewFieldMetaList: IFieldMeta[] =
-              await view.getFieldMetaList();
+            const viewFieldMetaList: IFieldMeta[] = await view.getFieldMetaList();
             if (viewFieldMetaList && viewFieldMetaList.length > 0) {
               const nameToTableMeta = new Map<string, IFieldMeta>();
-              tableFieldMetaList.forEach((fm) =>
-                nameToTableMeta.set(fm.name, fm),
-              );
+              tableFieldMetaList.forEach((fm) => nameToTableMeta.set(fm.name, fm));
               const inViewOrdered: IFieldMeta[] = [];
               const addedNames = new Set<string>();
               for (const vfm of viewFieldMetaList) {
@@ -319,7 +254,7 @@ function LoadApp() {
                 } else {
                   if ((vfm as any).id) {
                     const tmById = tableFieldMetaList.find(
-                      (x) => x.id === (vfm as any).id,
+                      (x) => x.id === (vfm as any).id
                     );
                     if (tmById) {
                       inViewOrdered.push(tmById);
@@ -340,15 +275,27 @@ function LoadApp() {
             }
           }
         } catch (e) {
-          console.warn(
-            "getViewById/getFieldMetaList failed, fallback to table fields:",
-            e,
-          );
+          console.warn("视图字段排序失败，使用默认顺序", e);
         }
       }
 
+      // 准备新表字段
       const skippedFields: string[] = [];
       const initialFields: any[] = [];
+      const buildFieldConfig = (fieldMeta: IFieldMeta) => {
+        const cfg: any = {
+          name: fieldMeta.name,
+          type: fieldMeta.type,
+        };
+        if ((fieldMeta as any).property) {
+          const prop = { ...(fieldMeta as any).property };
+          delete prop.fieldId;
+          delete prop.tableId;
+          cfg.property = prop;
+        }
+        return cfg;
+      };
+
       let sourcePrimaryFieldId: string | null = null;
       for (const fm of tableFieldMetaList) {
         if ((fm as any).is_primary || (fm as any).isPrimary) {
@@ -364,40 +311,19 @@ function LoadApp() {
           }
         }
       }
+
       const primaryFieldMeta = sourcePrimaryFieldId
-        ? tableFieldMetaList.find((f) => f.id === sourcePrimaryFieldId) || null
+        ? tableFieldMetaList.find((f) => f.id === sourcePrimaryFieldId)
         : null;
 
-      const buildFieldConfig = (fieldMeta: IFieldMeta) => {
-        const cfg: any = {
-          name: fieldMeta.name,
-          type: fieldMeta.type,
-        };
-        if ((fieldMeta as any).property) {
-          const prop = { ...(fieldMeta as any).property };
-          delete prop.fieldId;
-          delete prop.tableId;
-          cfg.property = prop;
-        }
-        return cfg;
-      };
-
       if (primaryFieldMeta) {
-        try {
-          if (SKIP_FIELD_TYPES.includes(primaryFieldMeta.type)) {
-            skippedFields.push(primaryFieldMeta.name);
-          } else {
-            const primaryCfg = buildFieldConfig(primaryFieldMeta);
-            primaryCfg.is_primary = true;
-            primaryCfg.isPrimary = true;
-            initialFields.push(primaryCfg);
-          }
-        } catch (e) {
-          console.warn(
-            `Could not prepare primary field ${primaryFieldMeta.name}:`,
-            e,
-          );
+        if (SKIP_FIELD_TYPES.includes(primaryFieldMeta.type)) {
           skippedFields.push(primaryFieldMeta.name);
+        } else {
+          const primaryCfg = buildFieldConfig(primaryFieldMeta);
+          primaryCfg.is_primary = true;
+          primaryCfg.isPrimary = true;
+          initialFields.push(primaryCfg);
         }
       }
 
@@ -407,20 +333,14 @@ function LoadApp() {
           skippedFields.push(fm.name);
           continue;
         }
-        try {
-          const cfg = buildFieldConfig(fm);
-          initialFields.push(cfg);
-        } catch (e) {
-          console.warn(`Could not prepare field ${fm.name}:`, e);
-          skippedFields.push(fm.name);
-        }
+        initialFields.push(buildFieldConfig(fm));
       }
 
       // 创建新表
       const { tableId } = await bitable.base.addTable({
         name: newTableName.trim(),
         fields: initialFields,
-      } as any);
+      });
       const newTable = await bitable.base.getTableById(tableId);
       const newFieldMetaList = await newTable.getFieldMetaList();
       const fieldNameToIdMap: Record<string, string> = {};
@@ -428,25 +348,23 @@ function LoadApp() {
         fieldNameToIdMap[field.name] = field.id;
       });
 
-      // 缓存新表的单选/多选类型化字段
-      const newSingleSelectFields: Map<string, ISingleSelectField> = new Map();
-      const newMultiSelectFields: Map<string, IMultiSelectField> = new Map();
+      // 单选/多选字段缓存
+      const newSingleSelectFields = new Map<string, IOpenSingleSelectField>();
+      const newMultiSelectFields = new Map<string, IOpenMultiSelectField>();
       for (const meta of newFieldMetaList) {
         if (meta.type === FieldType.SingleSelect) {
-          const field = await newTable.getField<ISingleSelectField>(meta.id);
+          const field = await newTable.getField<IOpenSingleSelectField>(meta.id);
           newSingleSelectFields.set(meta.name, field);
         } else if (meta.type === FieldType.MultiSelect) {
-          const field = await newTable.getField<IMultiSelectField>(meta.id);
+          const field = await newTable.getField<IOpenMultiSelectField>(meta.id);
           newMultiSelectFields.set(meta.name, field);
         }
       }
 
-      // 找出cost_breakdown字段
-      const costBreakdownFieldMeta = tableFieldMetaList.find(
-        (f) => f.name.toLowerCase() === "cost_breakdown",
-      );
+      // 找出 cost_breakdown 字段
+      const costBreakdownMeta = tableFieldMetaList.find((f) => f.name === "cost_breakdown");
 
-      // 准备记录数据和单选/多选值缓存
+      // 准备记录数据
       const recordsToAdd: any[] = [];
       const sourceRecordIds = selectedRecords.map((r) => r.id);
       const sourceSelectValues: Array<{
@@ -454,10 +372,13 @@ function LoadApp() {
         multi: Record<string, string[]>;
       }> = [];
 
-      for (const recordId of sourceRecordIds) {
+      for (let idx = 0; idx < sourceRecordIds.length; idx++) {
+        const recordId = sourceRecordIds[idx];
         const recordData: Record<string, any> = {};
         const singleValues: Record<string, string> = {};
         const multiValues: Record<string, string[]> = {};
+
+        setStatusMessage(`正在处理第 ${idx + 1}/${sourceRecordIds.length} 条记录...`);
 
         for (const fieldMeta of tableFieldMetaList) {
           try {
@@ -465,96 +386,57 @@ function LoadApp() {
             if (!field) continue;
             let value = await field.getValue(recordId);
 
-            // 特殊处理 cost_breakdown 字段：调用 Coze API 创建表格副本
-            if (
-              costBreakdownFieldMeta &&
-              fieldMeta.id === costBreakdownFieldMeta.id &&
-              value !== null &&
-              value !== undefined
-            ) {
-              // 提取 URL - getValue() 返回数组或对象或字符串
-              let tableUrl = "";
-              
-              console.log(`[Coze] Raw value from cost_breakdown field:`, JSON.stringify(value).substring(0, 200));
-              
+            // 特殊处理 cost_breakdown
+            if (costBreakdownMeta && fieldMeta.id === costBreakdownMeta.id && value) {
+              let originalUrl = "";
               if (typeof value === "string") {
-                // 情况1: 直接是字符串
-                tableUrl = value;
+                originalUrl = value;
               } else if (Array.isArray(value) && value.length > 0) {
-                // 情况2: 是数组，提取第一个元素的 link
-                const firstItem = value[0];
-                if (typeof firstItem === "object" && firstItem.link && typeof firstItem.link === "string") {
-                  tableUrl = firstItem.link;
-                  console.log(`[Coze] Extracted link from array[0]:`, tableUrl.substring(0, 60));
-                } else {
-                  console.warn(`[Coze] Array item doesn't have link property:`, firstItem);
-                }
+                const first = value[0];
+                originalUrl = first.link || first.url || first.href || "";
               } else if (typeof value === "object" && value !== null) {
-                // 情况3: 是对象，检查常见属性
-                if (value.link && typeof value.link === "string") {
-                  tableUrl = value.link;
-                } else if (value.url && typeof value.url === "string") {
-                  tableUrl = value.url;
-                } else if (value.href && typeof value.href === "string") {
-                  tableUrl = value.href;
+                originalUrl = (value as any).link || (value as any).url || (value as any).href || "";
+              }
+
+              let finalUrl = originalUrl;
+
+              if (originalUrl && originalUrl.includes("feishu")) {
+                try {
+                  setStatusMessage(`等待第 ${idx + 1} 条子表副本创建（约30-60秒）...`);
+                  finalUrl = await getDuplicatedTableUrlFromCoze(originalUrl);
+                  message.success(`第 ${idx + 1} 条子表复制成功！`);
+                } catch (e: any) {
+                  console.warn("Coze 子表复制失败，使用原链接", e);
+                  message.warning(`第 ${idx + 1} 条子表复制失败，使用原链接`);
                 }
-                console.log(`[Coze] Extracted URL from object:`, tableUrl.substring(0, 60));
               }
-              
-              // 验证 tableUrl 是有效的链接
-              if (!tableUrl || !tableUrl.includes("feishu")) {
-                console.warn(`[Coze] Invalid table URL extracted:`, tableUrl);
-                continue;
-              }
-              
-              console.log(`[Coze] Sending to Coze API: ${tableUrl.substring(0, 60)}...`);
-              const duplicatedTableUrl = await duplicateTableWithCoze(tableUrl);
-              console.log(`[Coze] Coze returned:`, duplicatedTableUrl ? duplicatedTableUrl.substring(0, 60) : "null");
-              
-              const newFieldId = fieldNameToIdMap[costBreakdownFieldMeta.name];
+
+              const newFieldId = fieldNameToIdMap["cost_breakdown"];
               if (newFieldId) {
-                // 使用 Coze 返回的副本URL，如果失败则使用原始URL
-                const finalUrl = duplicatedTableUrl || tableUrl;
-                
-                if (finalUrl && typeof finalUrl === "string") {
-                  recordData[newFieldId] = finalUrl;
-                  console.log(`[Coze] Writing to new record: ${finalUrl.substring(0, 60)}...`);
-                } else {
-                  console.warn(`[Coze] No valid URL to write`);
-                }
+                recordData[newFieldId] = finalUrl;
               }
               continue;
             }
 
-            // 收集单选值
+            // 单选/多选收集
             if (fieldMeta.type === FieldType.SingleSelect) {
               if (value !== null && value !== undefined) {
-                const text =
-                  typeof value === "object"
-                    ? (value.text ?? String(value))
-                    : String(value);
+                const text = typeof value === "object" ? (value as any).text ?? String(value) : String(value);
                 singleValues[fieldMeta.name] = text;
               }
             } else if (fieldMeta.type === FieldType.MultiSelect) {
               if (Array.isArray(value)) {
-                const texts = value.map((opt: any) =>
-                  typeof opt === "object"
-                    ? (opt.text ?? String(opt))
-                    : String(opt),
-                );
+                const texts = value.map((opt: any) => (typeof opt === "object" ? opt.text ?? String(opt) : String(opt)));
                 multiValues[fieldMeta.name] = texts;
               }
             }
 
             // selected 强制 false
-            if (
-              fieldMeta.id === selectedFieldId &&
-              fieldMeta.type === FieldType.Checkbox
-            ) {
+            if (fieldMeta.id === selectedFieldId && fieldMeta.type === FieldType.Checkbox) {
               value = false;
             }
 
-            // 只写入非单选/多选字段
+            // 普通字段写入
             if (
               fieldMeta.type !== FieldType.SingleSelect &&
               fieldMeta.type !== FieldType.MultiSelect &&
@@ -567,7 +449,7 @@ function LoadApp() {
               }
             }
           } catch (e) {
-            console.warn(`Error reading field ${fieldMeta.name}`, e);
+            console.warn(`读取字段 ${fieldMeta.name} 失败`, e);
           }
         }
 
@@ -576,40 +458,34 @@ function LoadApp() {
       }
 
       // 批量添加记录
-      const addResult = (await newTable.addRecords(recordsToAdd)) as any;
+      const addResult = await newTable.addRecords(recordsToAdd);
       const newRecordIds: string[] = Array.isArray(addResult)
         ? addResult
-        : (addResult?.recordIds ?? []);
+        : addResult?.recordIds ?? [];
 
-      // 使用 setValue 写入单选/多选值
-      for (
-        let i = 0;
-        i < newRecordIds.length && i < sourceSelectValues.length;
-        i++
-      ) {
+      // 写入单选/多选
+      for (let i = 0; i < newRecordIds.length && i < sourceSelectValues.length; i++) {
         const newRecordId = newRecordIds[i];
         const { single, multi } = sourceSelectValues[i];
 
-        // 写入单选
         for (const [fieldName, text] of Object.entries(single)) {
           const field = newSingleSelectFields.get(fieldName);
           if (field && text) {
             try {
               await field.setValue(newRecordId, text);
             } catch (e) {
-              console.warn(`Failed to set single select ${fieldName}`, e);
+              console.warn(`设置单选 ${fieldName} 失败`, e);
             }
           }
         }
 
-        // 写入多选
         for (const [fieldName, texts] of Object.entries(multi)) {
           const field = newMultiSelectFields.get(fieldName);
           if (field && texts.length > 0) {
             try {
               await field.setValue(newRecordId, texts);
             } catch (e) {
-              console.warn(`Failed to set multi select ${fieldName}`, e);
+              console.warn(`设置多选 ${fieldName} 失败`, e);
             }
           }
         }
@@ -620,19 +496,17 @@ function LoadApp() {
         tableName: newTableName,
       });
       if (skippedFields.length > 0) {
-        successMsg +=
-          " " + t("skippedFieldsWarning", { fields: skippedFields.join(", ") });
+        successMsg += `（跳过字段：${skippedFields.join(", ")}）`;
       }
-
-      setStatusMessage(successMsg);
+      setStatusMessage(successMsg + " | 所有 cost_breakdown 已使用新副本链接");
       setStatusType("success");
-      message.success(t("operationSuccess"));
+      message.success("复制完成！所有子表均为独立副本");
       setSelectedRecords([]);
-    } catch (error) {
-      console.error("Error copying records:", error);
-      setStatusMessage(t("errorMessage", { error: (error as Error).message }));
+    } catch (error: any) {
+      console.error("复制过程出错:", error);
+      setStatusMessage("错误：" + (error.message || String(error)));
       setStatusType("error");
-      message.error(t("operationFailed"));
+      message.error("操作失败，请检查控制台");
     } finally {
       setLoading(false);
     }
@@ -642,8 +516,23 @@ function LoadApp() {
     <div style={{ padding: 16, maxHeight: "100vh", overflow: "auto" }}>
       <Card>
         <Space direction="vertical" style={{ width: "100%" }} size="middle">
+
+          {/* ✅ 新增：顶部 Logo */}
+          <div style={{ textAlign: "center", marginBottom: 8 }}>
+            <img
+              src="https://oss-casualinks.s3.cn-north-1.jdcloud-oss.com/src_images/gemdale_sh_logo.png"
+              alt="logo"
+              style={{
+                maxWidth: 180,
+                height: "auto",
+              }}
+            />
+          </div>
+
           <Title level={4}>{t("title")}</Title>
+
           <Alert message={statusMessage} type={statusType} showIcon />
+
           <div>
             <Text strong>{t("currentTable")}: </Text>
             <Text>{tableName}</Text>
@@ -684,6 +573,7 @@ function LoadApp() {
                 </Button>
               )}
             </div>
+
             {selectedRecords.length > 0 ? (
               <div
                 style={{
@@ -713,6 +603,7 @@ function LoadApp() {
               </Text>
             )}
           </div>
+
           <div>
             <Text strong>{t("newTableName")}: </Text>
             <Input
@@ -722,6 +613,7 @@ function LoadApp() {
               style={{ width: "100%", marginTop: 4 }}
             />
           </div>
+
           <Button
             type="primary"
             onClick={copyToNewTable}
@@ -731,8 +623,10 @@ function LoadApp() {
           >
             {loading ? t("copying") : t("copyToNewTable")}
           </Button>
+
         </Space>
       </Card>
+
       {loading && (
         <div
           style={{
@@ -748,9 +642,10 @@ function LoadApp() {
             zIndex: 1000,
           }}
         >
-          <Spin size="large" />
+          <Spin size="large" tip="正在等待子表副本创建，请耐心等待 30-90 秒..." />
         </div>
       )}
     </div>
   );
+
 }
