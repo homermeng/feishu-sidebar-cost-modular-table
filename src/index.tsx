@@ -461,7 +461,7 @@ function LoadApp() {
       const addResult = await newTable.addRecords(recordsToAdd);
       const newRecordIds: string[] = Array.isArray(addResult)
         ? addResult
-        : addResult?.recordIds ?? [];
+        : (addResult as { recordIds?: string[] })?.recordIds ?? [];
 
       // 写入单选/多选
       for (let i = 0; i < newRecordIds.length && i < sourceSelectValues.length; i++) {
